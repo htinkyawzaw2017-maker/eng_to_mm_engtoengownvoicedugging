@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Recap English to Myanmar</title>
+  <style>
+    body{font:16px system-ui,sans-serif;max-width:720px;margin:40px auto;padding:0 18px;background:#0d0f14;color:#e7eaf0}
+    main{background:#151922;border:1px solid #303744;border-radius:12px;padding:24px} label{display:block;margin:16px 0 6px;color:#9da7b6}
+    input,button{font:inherit;padding:10px;border-radius:7px;border:1px solid #3b4556;background:#0a0c10;color:inherit} input{width:100%;box-sizing:border-box}
+    button{background:#5b8cff;border:0;cursor:pointer;margin-top:18px} button:disabled{opacity:.5} progress{width:100%;margin-top:20px}
+    #status{white-space:pre-wrap;margin-top:18px;color:#b8c5d9} a{color:#8db3ff}
+  </style>
+</head>
+<body><main>
+  <h1>Recap English → Myanmar</h1>
+  <p>Upload a video, then wait for the asynchronous AWS job to finish.</p>
+  <label for="file">Video or audio</label><input id="file" type="file" accept="video/*,audio/*">
+  <label for="voice">Myanmar voice</label><input id="voice" value="my-MM-ThihaNeural">
+  <button id="start">Upload and start</button><progress id="progress" hidden></progress><div id="status"></div>
+<script>
+const api = window.RECAP_API_BASE || '';
+const file = document.querySelector('#file'), voice = document.querySelector('#voice'), start = document.querySelector('#start');
+const status = document.querySelector('#status'), progress = document.querySelector('#progress');
+const show = value => status.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+async function call(path, options={}) { const r = await fetch(api + path, options); const data = await r.json(); if (!r.ok) throw new Error(data.detail || r.statusText); return data; }
+start.onclick = async () => {
+  if (!file.files[0]) return show('Choose a video or audio file first.');
+  start.disabled = true; progress.hidden = false; progress.removeAttribute('value');
+  try {
+    const f = file.files[0]; show('Creating secure upload URL…');
+    const upload = await call('/v1/uploads', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({filename:f.name, content_type:f.type || 'application/octet-stream', voice:voice.value})});
+    show('Uploading…'); const put = await fetch(upload.upload_url, {method:'PUT', headers:{'content-type':f.type || 'application/octet-stream'}, body:f}); if (!put.ok) throw new Error('S3 upload failed');
+    show('Starting processing…'); const job = await call('/v1/jobs', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({job_id:upload.job_id, voice:voice.value})});
+    show(job); let done = false;
+    while (!done) { await new Promise(r=>setTimeout(r,5000)); const state = await call('/v1/jobs/' + encodeURIComponent(upload.job_id)); show(state); done = ['completed','failed'].includes(state.state); }
+  } catch (e) { show('Error: ' + e.message); } finally { start.disabled = false; }
+};
+</script></main></body></html>
