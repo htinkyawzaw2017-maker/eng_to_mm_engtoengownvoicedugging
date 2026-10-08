@@ -14,9 +14,12 @@ from typing import Any
 
 import boto3
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="Recap Jobs API", version="0.1.0")
+allowed_origins = [item.strip() for item in os.getenv("RECAP_ALLOWED_ORIGINS", "*").split(",") if item.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=["GET", "POST"], allow_headers=["*"])
 s3 = boto3.client("s3", region_name=os.getenv("AWS_REGION"))
 sqs = boto3.client("sqs", region_name=os.getenv("AWS_REGION"))
 MEDIA_BUCKET = os.getenv("RECAP_MEDIA_BUCKET", "").strip()
