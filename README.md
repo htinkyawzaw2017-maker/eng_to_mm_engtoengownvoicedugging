@@ -171,6 +171,19 @@ GEMINI_API_KEY=...
 
 Do not place AWS access keys in `.env`; use an EC2 instance profile or ECS task role. The worker is intentionally asynchronous: the web/API layer should upload to S3 and enqueue a job instead of waiting for video rendering in an HTTP request. GPU workers and autoscaling can be added after the CPU pipeline is validated.
 
+### AWS infrastructure and API
+
+`infra/terraform/` creates a private encrypted S3 bucket, upload/output lifecycle rules, an SQS job queue, and a dead-letter queue. Review the variables before applying it:
+
+```bash
+cd infra/terraform
+terraform init
+terraform plan -var='media_bucket_name=your-unique-bucket-name'
+terraform apply -var='media_bucket_name=your-unique-bucket-name'
+```
+
+`cloud/api.py` provides the first API layer. Run it behind HTTPS with `uvicorn cloud.api:app --host 0.0.0.0 --port 8000` and set `RECAP_MEDIA_BUCKET` and `RECAP_SQS_QUEUE_URL`. The browser flow is: `POST /v1/uploads` → PUT the file to the returned S3 URL → `POST /v1/jobs` → poll `GET /v1/jobs/{job_id}`. Do not expose the API publicly until authentication, request limits, and an HTTPS endpoint are configured.
+
 ## Test
 
 ```bat

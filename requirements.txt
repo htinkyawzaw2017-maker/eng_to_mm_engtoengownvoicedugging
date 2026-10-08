@@ -18,3 +18,5 @@ pillow==12.3.0              # overlays, preview
 requests==2.32.3
 playwright==1.62.0              # Myanmar text renderer (Chromium)
 boto3>=1.35.0                   # AWS S3 and SQS worker (optional for desktop use)
+fastapi>=0.115.0                # AWS upload/job API
+uvicorn[standard]>=0.30.0      # API server
