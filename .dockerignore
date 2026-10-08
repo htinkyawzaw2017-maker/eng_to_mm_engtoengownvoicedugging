@@ -1,0 +1,37 @@
+# Keep secrets, local state and heavy folders out of the build context.
+.env
+.env.*
+!.env.example
+config.json
+.git
+.gitignore
+.github
+
+# local work folders
+jobs/
+logs/
+cloud_jobs/
+ffmpeg/
+setup_check.log
+
+# python / editors
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.venv*/
+*.egg-info/
+
+# not needed inside the image
+tests/
+infra/
+web/
+docs/
+*.zip
+*.bat
+*.ps1
+requirements-dev.txt
+.dockerignore
+Dockerfile
+README.md
+DEPLOYMENT.md

@@ -143,46 +143,56 @@ recap_runtime/services/
   ai_service.py            Gemini client (proxy option)
 services/
   text_overlay_service.py  မြန်မာ title စာကို Chromium နဲ့ ပုံထုတ်တာ
+cloud/
+  api.py                   FastAPI: /health, /v1/uploads, /v1/jobs, /v1/jobs/{id}
+  aws_worker.py            SQS worker: download → planner → render → upload
+  start-worker.sh          EC2 user-data entry point
+web/index.html             Upload page (presigned POST → job → status → download)
+infra/terraform/           S3, SQS, dead-letter queue, IAM roles, log group
+scripts/e2e_local.py       AWS မလိုတဲ့ end-to-end test (အဆင့် ၁၈)
+Dockerfile / .dockerignore image တစ်ခုတည်းက API နဲ့ worker နှစ်ခုလုံး
+DEPLOYMENT.md              Terraform → ECR → ECS/EC2 → HTTPS → CloudWatch
+Makefile                   make test / make e2e / make build
 tests/                     python -m unittest discover -s tests
 ```
 
-## AWS worker (first cloud deployment path)
+## AWS deployment (cloud pipeline)
 
-The desktop UI is still available for local testing. For AWS, the existing planner and renderer can be run by `cloud/aws_worker.py` as an SQS worker:
+Desktop UI က local testing အတွက် ဆက်သုံးလို့ရပါတယ်။ AWS ပေါ်မှာတော့ အောက်ပါ flow နဲ့ အလုပ်လုပ်ပါတယ်။
 
-1. Put the source video in an S3 bucket.
-2. Send one JSON message to SQS with `job_id`, `input_bucket`, `input_key`, and optionally `output_bucket`, `output_prefix`, and `voice`.
-3. Run the worker on an EC2/ECS machine that has FFmpeg installed and an IAM role with access to the input/output S3 bucket and SQS queue.
-4. The worker writes `status.json`, `run.log`, transcript/plan files, and the final video under the output prefix.
+```
+browser ──POST /v1/uploads──▶ API ──presigned POST──▶ S3 (uploads/<job>/…)
+browser ──POST /v1/jobs────▶ API ──SendMessage────▶ SQS recap-jobs
+                                                    │
+                     S3 (jobs/<job>/…) ◀── worker ──┘  planner → render → upload
+browser ──GET /v1/jobs/<id>──▶ API ──reads status.json──▶ download link
+```
 
-Example message:
+| | Command | Notes |
+|---|---|---|
+| Infrastructure | `cd infra/terraform && terraform init && terraform plan && terraform apply` | S3, SQS, dead-letter queue, ၂ ခု IAM role, log group |
+| API | `uvicorn cloud.api:app --host 0.0.0.0 --port 8000` | `RECAP_MEDIA_BUCKET`, `RECAP_SQS_QUEUE_URL`, `AWS_REGION` လိုတယ် |
+| Worker | `python cloud/aws_worker.py` | `RECAP_SQS_QUEUE_URL`, `AWS_REGION`, `GEMINI_API_KEY` လိုတယ် |
+| Image | `docker build -t recap:latest .` | image တစ်ခုတည်းက API/worker နှစ်ခုလုံး run တယ် |
+| Upload page | `web/index.html` | API URL ကို page ပေါ်မှာ ပြောင်းလို့ရတယ် |
+
+**အသေးစိတ် deployment လမ်းညွှန် (Terraform, ECR, ECS/EC2, HTTPS, CloudWatch, budget alert, cost)** ကို
+**[`DEPLOYMENT.md`](DEPLOYMENT.md)** မှာ ဖတ်ပါ။
+
+> ⚠️ **ကုန်ကျစရိတ်** — worker instance/service ဖွင့်ထားတဲ့ အချိန်တိုင်း ကုန်ကျပါတယ်။ မစမ်းတော့ရင်
+> ပိတ်ပါ။ Budget alert ကို အရင်ဆုံး တည်ပါ။ CPU worker တစ်ခုတည်းနဲ့ မိနစ်ပိုင်း video နဲ့ စစမ်းပါ။
+
+Job message format (API က အလိုလို ဖန်တီးပေးပါတယ်):
 
 ```json
-{"job_id":"job-001","input_bucket":"recap-media","input_key":"uploads/job-001/source.mp4","output_prefix":"jobs/job-001","voice":"my-MM-ThihaNeural"}
+{"job_id":"job-001","input_bucket":"recap-media","input_key":"uploads/job-001/source.mp4",
+ "output_bucket":"recap-media","output_prefix":"jobs/job-001","voice":"my-MM-ThihaNeural"}
 ```
 
-Required worker environment:
-
-```text
-AWS_REGION=ap-southeast-1
-RECAP_SQS_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/ACCOUNT/recap-jobs
-GEMINI_API_KEY=...
-```
-
-Do not place AWS access keys in `.env`; use an EC2 instance profile or ECS task role. The worker is intentionally asynchronous: the web/API layer should upload to S3 and enqueue a job instead of waiting for video rendering in an HTTP request. GPU workers and autoscaling can be added after the CPU pipeline is validated.
-
-### AWS infrastructure and API
-
-`infra/terraform/` creates a private encrypted S3 bucket, upload/output lifecycle rules, an SQS job queue, and a dead-letter queue. Review the variables before applying it:
-
-```bash
-cd infra/terraform
-terraform init
-terraform plan -var='media_bucket_name=your-unique-bucket-name'
-terraform apply -var='media_bucket_name=your-unique-bucket-name'
-```
-
-`cloud/api.py` provides the first API layer. Run it behind HTTPS with `uvicorn cloud.api:app --host 0.0.0.0 --port 8000` and set `RECAP_MEDIA_BUCKET` and `RECAP_SQS_QUEUE_URL`. The browser flow is: `POST /v1/uploads` → PUT the file to the returned S3 URL → `POST /v1/jobs` → poll `GET /v1/jobs/{job_id}`. Do not expose the API publicly until authentication, request limits, and an HTTPS endpoint are configured.
+လုံခြုံရေး:
+- AWS access key ကို `.env`၊ code၊ Docker image၊ SQS message၊ browser — ဘယ်မှာမှ မထည့်ပါနဲ့။ IAM role သုံးပါ။
+- Job fail ၃ ကြိမ် ဖြစ်ရင် dead-letter queue ကို အလိုလို ရောက်ပါတယ်။ `jobs/<id>/status.json` နဲ့ `run.log` ကို ဖတ်ပါ။
+- API ကို authentication နဲ့ HTTPS မရှိဘဲ public မထားပါနဲ့။
 
 ## Test
 
@@ -190,6 +200,19 @@ terraform apply -var='media_bucket_name=your-unique-bucket-name'
 py -3.12 -m unittest discover -s tests
 ```
 Internet မလိုပါဘူး။ Gemini ကို အတုနဲ့ အစားထိုး စမ်းပါတယ်။
+
+Cloud layer (API, SQS worker, Terraform, Dockerfile, upload page) အတွက်ပါ test ပါဝင်ပါတယ် — AWS account,
+FFmpeg နဲ့ network မလိုပါဘူး။ Terraform စစ်တဲ့ test က `python-hcl2` လိုတယ်
+(`pip install -r requirements-dev.txt`)။ မရှိရင် အဲ့ test တစ်ခုပဲ skip ဖြစ်ပါတယ်။
+
+End-to-end flow (upload → S3 → SQS → worker subprocess → S3 output → status → download, အဆင့် ၁၈ ဆင့်) ကို
+AWS မလိုဘဲ စမ်းလို့ရပါတယ်:
+
+```bash
+python scripts/e2e_local.py
+```
+
+Whisper, Gemini, Edge TTS နဲ့ FFmpeg ကိုပဲ stub လုပ်ထားပြီး ကျန်တဲ့ code path အားလုံး တကယ် run ပါတယ်။
 
 ## သတိပြုရန်
 
@@ -263,7 +286,19 @@ Result: `jobs\<name>_<code>\edge_tts_smart_sync\final_edge_tts_smart_sync.mp4`
 `translation_audit` (true), `title_font_path`, `overlay_blur_strength` (18).
 
 ### Tests
-`py -3.12 -m unittest discover -s tests` (offline; Gemini is mocked).
+`py -3.12 -m unittest discover -s tests` — 61 tests, offline; Gemini is mocked. This covers the
+translation rules, the Smart Sync timings, the cloud API, the SQS worker (including retry and
+dead-lettering), the Terraform configuration, the Dockerfile and the upload page. The Terraform
+check needs `pip install -r requirements-dev.txt`; without it that one test skips.
+
+`python scripts/e2e_local.py` runs the whole cloud flow (upload → S3 → SQS → worker subprocesses →
+S3 output → status → download, 18 steps) with no AWS account, no FFmpeg and no network: only
+Whisper, Gemini, Edge TTS and FFmpeg are stubbed.
+
+### Cloud deployment
+See [DEPLOYMENT.md](DEPLOYMENT.md) for Terraform, ECR, ECS/EC2, HTTPS, CloudWatch, budget alerts and
+the cost notes. In short: `uvicorn cloud.api:app --host 0.0.0.0 --port 8000` for the API and
+`python cloud/aws_worker.py` for the worker, both from the same Docker image.
 
 ### Notes
 Edge TTS is a Microsoft online service and Gemini is a Google API — follow their terms. You are

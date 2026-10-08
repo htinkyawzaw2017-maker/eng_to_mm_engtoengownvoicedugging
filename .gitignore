@@ -18,3 +18,11 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv*/
+
+# Terraform - the state file contains ARNs and must never be committed
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
